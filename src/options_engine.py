@@ -103,6 +103,16 @@ def select_covered_call(ticker: str, spot: float, expirations: list[str], get_ch
     return best
 
 
+def no_setup_reason(expirations: list[str], today: date | None = None) -> str:
+    """Plain-language reason select_covered_call found nothing."""
+    today = today or date.today()
+    if not expirations:
+        return "no options listed"
+    if not any(config.DTE_MIN <= (_to_date(e) - today).days <= config.DTE_MAX for e in expirations):
+        return f"no option expiring in {config.DTE_MIN}–{config.DTE_MAX} days"
+    return "options not traded enough"
+
+
 def payoff_curve(spot: float, strike: float, premium: float, points: int = 121) -> pd.DataFrame:
     """Profit/loss at expiration for 100 shares, with and without the short call."""
     prices = np.linspace(spot * 0.6, spot * 1.4, points)

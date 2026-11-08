@@ -6,8 +6,8 @@ from datetime import date
 import pandas as pd
 
 from src.earnings_tracker import CLEAR, HIGH, MEDIUM, UNKNOWN, build_earnings_calendar, classify_earnings_risk
-from src.options_engine import bs_call_delta, payoff_curve, select_covered_call
-from src.paper_trader import simulate_closeout
+from src.options_engine import bs_call_delta, no_setup_reason, payoff_curve, select_covered_call
+from src.paper_trader import mark_to_market, simulate_closeout
 from src.piotroski import compute_fscore, score_statements
 from src.universe import bottom_pb_by_sector
 
@@ -137,6 +137,20 @@ class TestOptions(unittest.TestCase):
         self.assertAlmostEqual(curve["covered_call"].max(), (105 - 100 + 2) * 100)
         low = curve.iloc[0]
         self.assertAlmostEqual(low["covered_call"] - low["stock_only"], 200.0)
+
+    def test_no_setup_reason(self):
+        today = date(2026, 1, 1)
+        self.assertEqual(no_setup_reason([], today), "no options listed")
+        self.assertEqual(no_setup_reason(["2026-01-16"], today), "no option expiring in 30–45 days")
+        self.assertEqual(no_setup_reason(["2026-02-06"], today), "options not traded enough")
+
+    def test_mark_to_market(self):
+        pos = {"entry_price": 100.0, "strike": 105.0, "premium": 2.0, "shares": 100}
+        m = mark_to_market(pos, 103.0, call_price=1.5)
+        self.assertEqual(m["cost"], 9800.0)
+        self.assertEqual(m["value"], 10150.0)
+        self.assertAlmostEqual(m["pnl_pct"], 350.0 / 9800.0)
+        self.assertEqual(mark_to_market(pos, 110.0)["value"], 10500.0)  # call at intrinsic value
 
     def test_closeout(self):
         pos = {"entry_price": 100.0, "strike": 105.0, "premium": 2.0, "shares": 100}

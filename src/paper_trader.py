@@ -63,6 +63,20 @@ def breakeven(p: dict) -> float:
     return p["entry_price"] - p["premium"]
 
 
+def mark_to_market(p: dict, stock_price: float, call_price: float | None = None) -> dict:
+    """Current value of an open covered call: shares minus the cost to buy back the call.
+
+    Cost is what was paid net of the premium collected. Without a live call
+    quote, the call is valued at its intrinsic value.
+    """
+    if call_price is None:
+        call_price = max(0.0, stock_price - p["strike"])
+    cost = (p["entry_price"] - p["premium"]) * p["shares"]
+    value = (stock_price - call_price) * p["shares"]
+    pnl = value - cost
+    return {"cost": cost, "value": value, "pnl": pnl, "pnl_pct": pnl / cost if cost else 0.0}
+
+
 def simulate_closeout(p: dict, price_at_expiration: float) -> dict:
     """Outcome at expiration: called away above the strike, else call expires worthless."""
     assigned = price_at_expiration >= p["strike"]

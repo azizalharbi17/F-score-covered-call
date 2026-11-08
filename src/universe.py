@@ -16,7 +16,7 @@ import pandas as pd
 
 from src import config
 from src.earnings_tracker import build_earnings_calendar, classify_earnings_risk, days_until
-from src.options_engine import CoveredCallSetup, select_covered_call
+from src.options_engine import CoveredCallSetup, no_setup_reason, select_covered_call
 from src.piotroski import FScoreResult, score_statements
 from src.sec_edgar import latest_periodic_filing
 
@@ -50,6 +50,8 @@ class ScreenResult:
     fscores: dict[str, FScoreResult] = field(default_factory=dict)
     earnings: pd.DataFrame = field(default_factory=pd.DataFrame)
     run_date: date = field(default_factory=date.today)
+    candidates: list[dict] = field(default_factory=list)      # profiles that reached the F-Score step
+    option_notes: dict[str, str] = field(default_factory=dict)  # F-Score ≥ 8 names with no call: why
 
 
 def passes_cap_and_sector(p: dict) -> bool:
@@ -113,21 +115,25 @@ def run_screen(tickers: list[str], provider, sec_client=None, today: date | None
 
     def option_setup(p):
         exps = provider.get_option_expirations(p["ticker"])
-        return select_covered_call(p["ticker"], p["price"], exps,
-                                   lambda e: provider.get_call_chain(p["ticker"], e), today)
+        setup = select_covered_call(p["ticker"], p["price"], exps,
+                                    lambda e: provider.get_call_chain(p["ticker"], e), today)
+        return setup, (None if setup else no_setup_reason(exps, today))
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        setups = list(pool.map(option_setup, strong))
+        outcomes = list(pool.map(option_setup, strong))
     signals = []
-    for p, setup in zip(strong, setups):
+    option_notes = {}
+    for p, (setup, reason) in zip(strong, outcomes):
         if setup is None:
+            option_notes[p["ticker"]] = reason
             continue
         filings = sec_client.get_latest_filings(p["ticker"]) if sec_client else None
         signals.append(Signal(p, fscores[p["ticker"]], setup, filings))
     funnel[STAGES[6]] = len(signals)
 
     earnings = build_earnings_calendar(liquid, today)
-    return ScreenResult(funnel, signals, fscores, earnings, today)
+    scored = [p for p in cheap if p["ticker"] in fscores]
+    return ScreenResult(funnel, signals, fscores, earnings, today, scored, option_notes)
 
 
 def signals_table(result: ScreenResult) -> pd.DataFrame:

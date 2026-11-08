@@ -76,7 +76,19 @@ class FakeSec:
                                    "url": "https://www.sec.gov/Archives/edgar/data/1/x/q.htm"}}
 
 
+class IlliquidProvider(FakeProvider):
+    def get_call_chain(self, ticker, expiration):
+        chain = super().get_call_chain(ticker, expiration)
+        chain["volume"] = 5
+        return chain
+
+
 class TestEndToEnd(unittest.TestCase):
+    def test_illiquid_options_become_almost_picks(self):
+        result = run_screen(list(FakeProvider().profiles), IlliquidProvider(), FakeSec(), today=TODAY, max_workers=2)
+        self.assertEqual(result.signals, [])
+        self.assertEqual(result.option_notes, {"CHEAP": "options not traded enough"})
+
     def test_pipeline(self):
         tickers = list(FakeProvider().profiles) + ["DELISTED"]
         result = run_screen(tickers, FakeProvider(), FakeSec(), today=TODAY, max_workers=2)
@@ -85,6 +97,8 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual([result.funnel[s] for s in STAGES], [15, 14, 12, 10, 2, 1, 1])
         self.assertEqual([s.ticker for s in result.signals], ["CHEAP"])
         self.assertEqual(result.fscores["TRAP"].score < 8, True)
+        self.assertEqual(sorted(c["ticker"] for c in result.candidates), ["CHEAP", "TRAP"])
+        self.assertEqual(result.option_notes, {})
 
         sig = result.signals[0]
         self.assertEqual(sig.fscore.score, 9)
