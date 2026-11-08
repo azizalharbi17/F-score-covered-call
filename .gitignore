@@ -1,0 +1,17 @@
+# Secrets / local config
+.env
+
+# Disk cache
+.cache/
+
+# Local paper-trading portfolio
+data/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / tooling
+.claude/
+.DS_Store
