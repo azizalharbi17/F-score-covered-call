@@ -35,6 +35,12 @@ def last_and_next(dates: list[date], today: date) -> tuple[date | None, date | N
     return (past[-1] if past else None), (future[0] if future else None)
 
 
+def past_earnings(dates: list[date], today: date, quarters_back: int = 0) -> date | None:
+    """Earnings date `quarters_back` reports before the most recent one (0 = most recent)."""
+    past = [d for d in dates if d <= today]
+    return past[-1 - quarters_back] if len(past) > quarters_back else None
+
+
 def results_announced_before(dates: list[date], filing_date: date, window_days: int = 90) -> date | None:
     """The earnings announcement that came with a filing: latest date on or before it, within the window."""
     candidates = [d for d in dates if 0 <= (filing_date - d).days <= window_days]

@@ -1,2 +1,6 @@
 [theme]
 base = "light"
+# Streamlit tints the hovered table row with this color, so a light blue makes the row under the mouse stand out.
+secondaryBackgroundColor = "#93c5fd"
+# Keep table headers neutral gray.
+dataframeHeaderBackgroundColor = "#f1f5f9"

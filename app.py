@@ -11,7 +11,7 @@ import streamlit as st
 
 from src import config
 from src.data_provider import MarketDataProvider
-from src.earnings_tracker import last_and_next, results_announced_before
+from src.earnings_tracker import last_and_next, past_earnings, results_announced_before
 from src.options_engine import payoff_curve, robinhood_order
 from src.paper_trader import PaperPortfolio, mark_to_market, simulate_closeout
 from src.sec_edgar import SecEdgarClient, filings_browse_url
@@ -100,6 +100,7 @@ def stock_dates(result, profile: dict) -> dict:
         "annual_results": results_announced_before(earnings, annual_filed) if annual_filed else None,
         "quarterly_filed": date.fromisoformat(quarterly["filing_date"]) if quarterly else None,
         "last_earnings": last,
+        "earnings_2q_ago": past_earnings(earnings, today, 2),
         "next_earnings": nxt,
     }
 
@@ -107,18 +108,22 @@ def stock_dates(result, profile: dict) -> dict:
 def timeline(dates: dict, fy_end: str | None) -> list[tuple[date, str]]:
     """Events worth checking on a price chart, oldest first."""
     year = f" for the year ended {fmt_date(date.fromisoformat(fy_end))}" if fy_end else ""
-    events = []
-    if dates["annual_results"]:
-        events.append((dates["annual_results"], "Announced full-year results (the numbers behind this score)"))
-    if dates["annual_filed"]:
-        events.append((dates["annual_filed"], f"Filed the annual report{year}. The F-Score uses this report"))
-    if dates["last_earnings"] and dates["last_earnings"] != dates["annual_results"]:
-        events.append((dates["last_earnings"], "Last earnings report"))
+    events: dict[date, list[str]] = {}
+
+    def add(when, label):
+        if when:
+            events.setdefault(when, []).append(label)
+
+    add(dates["annual_results"], "Earnings report with full-year results (the numbers behind this score)")
+    add(dates["annual_filed"], f"Filed the annual report (10-K){year}. The F-Score uses this report")
+    if dates["earnings_2q_ago"] != dates["annual_results"]:
+        add(dates["earnings_2q_ago"], "Earnings report 2 quarters ago")
+    if dates["last_earnings"] != dates["annual_results"]:
+        add(dates["last_earnings"], "Last earnings report")
     if dates["quarterly_filed"] and (not dates["annual_filed"] or dates["quarterly_filed"] > dates["annual_filed"]):
-        events.append((dates["quarterly_filed"], "Filed the latest quarterly report"))
-    if dates["next_earnings"]:
-        events.append((dates["next_earnings"], "Next earnings report (scheduled)"))
-    return sorted(events, key=lambda e: e[0])
+        add(dates["quarterly_filed"], "Filed the latest quarterly report (10-Q)")
+    add(dates["next_earnings"], "Next earnings report (scheduled)")
+    return [(when, "; ".join(labels)) for when, labels in sorted(events.items())]
 
 
 def dots_html(fs) -> str:
@@ -157,9 +162,9 @@ if not picks:
                 unsafe_allow_html=True)
 
 st.subheader("Every stock that reached the score step")
-st.caption("The F-Score compares each company's latest annual report with the year before. "
-           "The date columns show when that report was filed and when the company last reported "
-           "and next reports earnings.")
+st.caption("The F-Score compares each company's latest annual report (10-K) with the year before. "
+           "10-K and 10-Q dates are when the official reports were filed with the SEC. Earnings report dates are "
+           "when the company announced its results, which is when the stock usually moves.")
 ranked = sorted(result.candidates, key=lambda p: (-result.fscores[p["ticker"]].score, p["ticker"]))
 dates_by_ticker = {p["ticker"]: stock_dates(result, p) for p in ranked}
 rows, scores = [], []
@@ -178,13 +183,17 @@ for p in ranked:
         "Potential": tier(score),
         "Price-to-book": f"{p['price_to_book']:.2f}  ·  Cheap",  # every name here is in its sector's bottom 20%
         "Option ready": ready,
-        "Score uses report filed": fmt_date(d["annual_filed"]),
-        "Last earnings": fmt_date(d["last_earnings"]),
-        "Next earnings": fmt_date(d["next_earnings"], "Not announced"),
+        "Score uses 10-K filed": fmt_date(d["annual_filed"]),
+        "Latest 10-Q filed": fmt_date(d["quarterly_filed"]),
+        "Earnings report 2 quarters ago": fmt_date(d["earnings_2q_ago"]),
+        "Last earnings report": fmt_date(d["last_earnings"]),
+        "Next earnings report": fmt_date(d["next_earnings"], "Not announced"),
     })
     scores.append(score)
 main = pd.DataFrame(rows, columns=["Stock", "F-Score", "Potential", "Price-to-book", "Option ready",
-                                   "Score uses report filed", "Last earnings", "Next earnings"])
+                                   "Score uses 10-K filed", "Latest 10-Q filed",
+                                   "Earnings report 2 quarters ago", "Last earnings report",
+                                   "Next earnings report"])
 
 
 def _color_scores(df: pd.DataFrame) -> pd.DataFrame:
@@ -251,7 +260,7 @@ for sig in picks:
         m1, m2, m3 = st.columns(3)
         m1.metric("Most you can make", f"${(c.strike - c.spot + c.premium) * n:,.2f}")
         m2.metric("Break-even price", f"${c.breakeven:,.2f}")
-        m3.metric("Next earnings", fmt_date(dates_by_ticker[sig.ticker]["next_earnings"], "Not announced"))
+        m3.metric("Next earnings report", fmt_date(dates_by_ticker[sig.ticker]["next_earnings"], "Not announced"))
         if st.button("Log to paper portfolio", key=f"log_{sig.ticker}"):
             portfolio.log_position(sig.ticker, c.spot, c.strike, c.premium, c.expiration)
             st.success(f"Added {sig.ticker} to your paper portfolio.")
@@ -263,8 +272,8 @@ st.header("Almost picks")
 if result.option_notes:
     almost = pd.DataFrame([
         {"Ticker": t, "Score": f"{result.fscores[t].score} / 9", "Why it was left out": reason.capitalize(),
-         "Last earnings": fmt_date(dates_by_ticker[t]["last_earnings"]),
-         "Next earnings": fmt_date(dates_by_ticker[t]["next_earnings"], "Not announced")}
+         "Last earnings report": fmt_date(dates_by_ticker[t]["last_earnings"]),
+         "Next earnings report": fmt_date(dates_by_ticker[t]["next_earnings"], "Not announced")}
         for t, reason in sorted(result.option_notes.items(), key=lambda kv: -result.fscores[kv[0]].score)
     ])
     st.dataframe(almost, hide_index=True, width="stretch")

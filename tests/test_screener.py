@@ -6,7 +6,7 @@ from datetime import date
 import pandas as pd
 
 from src.earnings_tracker import (CLEAR, HIGH, MEDIUM, UNKNOWN, build_earnings_calendar, classify_earnings_risk,
-                                  last_and_next, results_announced_before)
+                                  last_and_next, past_earnings, results_announced_before)
 from src.options_engine import bs_call_delta, no_setup_reason, payoff_curve, select_covered_call
 from src.paper_trader import mark_to_market, simulate_closeout
 from src.piotroski import compute_fscore, score_statements
@@ -188,6 +188,13 @@ class TestEarnings(unittest.TestCase):
         self.assertEqual(last_and_next(dates, date(2026, 11, 8)), (date(2026, 11, 2), date(2027, 2, 1)))
         self.assertEqual(last_and_next(dates, date(2026, 11, 2)), (date(2026, 11, 2), date(2027, 2, 1)))
         self.assertEqual(last_and_next([], date(2026, 11, 8)), (None, None))
+
+    def test_past_earnings_quarters_back(self):
+        dates = [date(2026, 2, 2), date(2026, 5, 5), date(2026, 8, 4), date(2026, 11, 2), date(2027, 2, 1)]
+        today = date(2026, 11, 8)
+        self.assertEqual(past_earnings(dates, today), date(2026, 11, 2))
+        self.assertEqual(past_earnings(dates, today, 2), date(2026, 5, 5))
+        self.assertIsNone(past_earnings(dates[:2], today, 2))
 
     def test_results_announced_before_filing(self):
         dates = [date(2025, 10, 30), date(2026, 2, 2), date(2026, 5, 5)]
