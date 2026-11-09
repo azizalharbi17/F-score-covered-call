@@ -47,21 +47,34 @@ class FScoreResult:
     prior_items: dict = field(default_factory=dict)
 
 
-def _value(df: pd.DataFrame, labels: list[str], col: int) -> float | None:
-    if df is None or df.empty or col >= len(df.columns):
+def _value(df: pd.DataFrame, labels: list[str], col) -> float | None:
+    """Value for the first matching row label. `col` is a column position (int) or a period date."""
+    if df is None or df.empty:
         return None
+    if isinstance(col, int):
+        if col >= len(df.columns):
+            return None
+        pos = col
+    else:
+        matches = [i for i, c in enumerate(df.columns) if pd.Timestamp(c) == pd.Timestamp(col)]
+        if not matches:
+            return None
+        pos = matches[0]
     for label in labels:
         if label in df.index:
-            value = df.loc[label].iloc[col]
+            value = df.loc[label].iloc[pos]
             if pd.notna(value):
                 return float(value)
     return None
 
 
-def extract_line_items(statements: dict[str, pd.DataFrame]) -> tuple[dict, dict, str | None, str | None]:
-    """Return (current, prior, current_period, prior_period) line-item dicts."""
+def extract_line_items(statements: dict[str, pd.DataFrame], cols=(0, 1)) -> tuple[dict, dict, str | None, str | None]:
+    """Return (current, prior, current_period, prior_period) line-item dicts.
+
+    `cols` are column positions (annual: latest and prior year) or period dates.
+    """
     periods = []
-    for col in (0, 1):
+    for col in cols:
         items = {}
         for key, (stmt, labels) in LINE_ITEMS.items():
             items[key] = _value(statements.get(stmt), labels, col)
@@ -74,12 +87,14 @@ def extract_line_items(statements: dict[str, pd.DataFrame]) -> tuple[dict, dict,
         periods.append(items)
 
     def _period(col):
+        if not isinstance(col, int):
+            return pd.Timestamp(col).strftime("%Y-%m-%d")
         df = statements.get("balance")
         if df is None or col >= len(df.columns):
             return None
         return pd.Timestamp(df.columns[col]).strftime("%Y-%m-%d")
 
-    return periods[0], periods[1], _period(0), _period(1)
+    return periods[0], periods[1], _period(cols[0]), _period(cols[1])
 
 
 def _ratio(num: float | None, den: float | None) -> float | None:
@@ -176,4 +191,27 @@ def compute_fscore(current: dict, prior: dict, period_current: str | None = None
 
 def score_statements(statements: dict[str, pd.DataFrame]) -> FScoreResult:
     current, prior, pc, pp = extract_line_items(statements)
+    return compute_fscore(current, prior, pc, pp)
+
+
+def year_ago_quarters(statements: dict[str, pd.DataFrame]) -> tuple | None:
+    """Latest reported quarter end and the quarter end about one year before it."""
+    balance = statements.get("balance")
+    if balance is None or balance.empty:
+        return None
+    reported = [pd.Timestamp(c) for c in balance.columns
+                if _value(balance, LINE_ITEMS["total_assets"][1], c) is not None]
+    if not reported:
+        return None
+    latest = max(reported)
+    year_ago = [c for c in reported if 330 <= (latest - c).days <= 400]
+    return (latest, max(year_ago)) if year_ago else None
+
+
+def score_quarterly_statements(statements: dict[str, pd.DataFrame]) -> FScoreResult | None:
+    """Same 9 tests on the latest quarter (10-Q) vs the same quarter a year earlier."""
+    quarters = year_ago_quarters(statements)
+    if quarters is None:
+        return None
+    current, prior, pc, pp = extract_line_items(statements, cols=quarters)
     return compute_fscore(current, prior, pc, pp)

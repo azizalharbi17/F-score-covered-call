@@ -19,23 +19,27 @@ from src.universe import STAGES, run_screen, signals_table
 
 st.set_page_config(page_title="F-Score Covered Call Screener", layout="wide")
 
-# Plain-language versions of the 9 F-Score points: (short name, if passed, if failed)
+# Plain-language versions of the 9 F-Score points: (short name, if passed, if failed).
+# {when} is the period scored ("last year" / "in the latest quarter"); {prior} is what it is compared with.
 PLAIN_POINTS = {
-    1: ("Made a profit", "Made a profit last year", "Lost money last year"),
-    2: ("Profit up vs last year", "Profit went up vs last year, relative to company size",
-        "Profit went down vs last year, relative to company size"),
-    3: ("Business brings in cash", "Its business brought in cash", "Its business used more cash than it brought in"),
+    1: ("Made a profit", "Made a profit {when}", "Lost money {when}"),
+    2: ("Profit up vs last year", "Profit went up vs {prior}, relative to company size",
+        "Profit went down vs {prior}, relative to company size"),
+    3: ("Business brings in cash", "Its business brought in cash {when}",
+        "Its business used more cash than it brought in {when}"),
     4: ("Profit backed by cash", "Cash coming in was higher than reported profit",
         "Reported profit was higher than the cash coming in"),
     5: ("Debt not rising", "Debt did not rise compared to company size", "Debt rose compared to company size"),
-    6: ("Bills easier to pay", "Better able to pay short-term bills than last year",
-        "Less able to pay short-term bills than last year"),
+    6: ("Bills easier to pay", "Better able to pay short-term bills than {prior}",
+        "Less able to pay short-term bills than {prior}"),
     7: ("No new shares", "Did not issue new shares", "Issued new shares, shrinking each owner's slice"),
-    8: ("Keeps more per sale", "Kept more of each sale as profit than last year",
-        "Kept less of each sale as profit than last year"),
-    9: ("More sales for its size", "Made more sales for its size than last year",
-        "Made fewer sales for its size than last year"),
+    8: ("Keeps more per sale", "Kept more of each sale as profit than {prior}",
+        "Kept less of each sale as profit than {prior}"),
+    9: ("More sales for its size", "Made more sales for its size than {prior}",
+        "Made fewer sales for its size than {prior}"),
 }
+ANNUAL_WORDS = {"when": "last year", "prior": "the year before"}
+QUARTER_WORDS = {"when": "in the latest quarter", "prior": "the same quarter a year earlier"}
 TIER_COLORS = {  # background, text
     "High": ("#dcfce7", "#166534"),
     "Medium": ("#fef9c3", "#854d0e"),
@@ -60,11 +64,29 @@ def market_status() -> str:
     return "open" if now.weekday() < 5 and time(9, 30) <= now.time() < time(16, 0) else "closed"
 
 
-def plain_point(check, missing: list[str]) -> tuple[bool | None, str]:
+def plain_point(check, missing: list[str], words: dict = ANNUAL_WORDS) -> tuple[bool | None, str]:
     if check.name in missing:
         return None, "Not enough data to check this"
     _, yes, no = PLAIN_POINTS[check.number]
-    return check.passed, (yes if check.passed else no)
+    return check.passed, (yes if check.passed else no).format(**words)
+
+
+def quarter_label(period: str | None) -> str:
+    """'2026-09-30' -> 'Jul–Sep 2026'."""
+    if not period:
+        return "n/a"
+    end = pd.Timestamp(period)
+    start = end - pd.DateOffset(months=2)
+    return f"{start:%b}–{end:%b %Y}"
+
+
+def render_points(fs, words: dict) -> None:
+    for ch in fs.checks:
+        ok, sentence = plain_point(ch, fs.missing, words)
+        mark = ('<span style="color:#16a34a;font-weight:700;">&#10003;</span>' if ok
+                else '<span style="color:#94a3b8;font-weight:700;">?</span>' if ok is None
+                else '<span style="color:#dc2626;font-weight:700;">&#10007;</span>')
+        st.markdown(f"{mark} &nbsp; {sentence}", unsafe_allow_html=True)
 
 
 def why_no_picks(result) -> str:
@@ -114,8 +136,8 @@ def timeline(dates: dict, fy_end: str | None) -> list[tuple[date, str]]:
         if when:
             events.setdefault(when, []).append(label)
 
-    add(dates["annual_results"], "Earnings report with full-year results (the numbers behind this score)")
-    add(dates["annual_filed"], f"Filed the annual report (10-K){year}. The F-Score uses this report")
+    add(dates["annual_results"], "Earnings report with full-year results (the numbers behind the annual F-Score)")
+    add(dates["annual_filed"], f"Filed the annual report (10-K){year}. The annual F-Score uses this report")
     if dates["earnings_2q_ago"] != dates["annual_results"]:
         add(dates["earnings_2q_ago"], "Earnings report 2 quarters ago")
     if dates["last_earnings"] != dates["annual_results"]:
@@ -162,14 +184,17 @@ if not picks:
                 unsafe_allow_html=True)
 
 st.subheader("Every stock that reached the score step")
-st.caption("The F-Score compares each company's latest annual report (10-K) with the year before. "
-           "10-K and 10-Q dates are when the official reports were filed with the SEC. Earnings report dates are "
-           "when the company announced its results, which is when the stock usually moves.")
+st.caption("F-Score (annual) compares each company's latest annual report (10-K) with the year before, and decides "
+           "the picks. F-Score (quarterly) runs the same 9 checks on the latest quarter (10-Q) vs the same quarter "
+           "a year earlier, for reference only. 10-K and 10-Q dates are when the official reports were filed with "
+           "the SEC. Earnings report dates are when the company announced its results, which is when the stock "
+           "usually moves.")
 ranked = sorted(result.candidates, key=lambda p: (-result.fscores[p["ticker"]].score, p["ticker"]))
 dates_by_ticker = {p["ticker"]: stock_dates(result, p) for p in ranked}
-rows, scores = [], []
+rows, scores, q_scores = [], [], []
 for p in ranked:
     score = result.fscores[p["ticker"]].score
+    q = result.quarterly_fscores.get(p["ticker"])
     d = dates_by_ticker[p["ticker"]]
     if p["ticker"] in pick_tickers:
         ready = "Yes"
@@ -179,8 +204,11 @@ for p in ranked:
         ready = "No: score too low to check"
     rows.append({
         "Stock": f"{p['ticker']}  ·  {p['name']}",
-        "F-Score": f"{score} / 9",
+        "F-Score (annual)": f"{score} / 9",
         "Potential": tier(score),
+        "F-Score (quarterly)": f"{q.score} / 9" if q else "n/a",
+        "Quarter compared": (f"{quarter_label(q.period_current)} vs {quarter_label(q.period_prior)}"
+                             if q else "Not available"),
         "Price-to-book": f"{p['price_to_book']:.2f}  ·  Cheap",  # every name here is in its sector's bottom 20%
         "Option ready": ready,
         "Score uses 10-K filed": fmt_date(d["annual_filed"]),
@@ -190,7 +218,9 @@ for p in ranked:
         "Next earnings report": fmt_date(d["next_earnings"], "Not announced"),
     })
     scores.append(score)
-main = pd.DataFrame(rows, columns=["Stock", "F-Score", "Potential", "Price-to-book", "Option ready",
+    q_scores.append(q.score if q else None)
+main = pd.DataFrame(rows, columns=["Stock", "F-Score (annual)", "Potential", "F-Score (quarterly)",
+                                   "Quarter compared", "Price-to-book", "Option ready",
                                    "Score uses 10-K filed", "Latest 10-Q filed",
                                    "Earnings report 2 quarters ago", "Last earnings report",
                                    "Next earnings report"])
@@ -198,11 +228,15 @@ main = pd.DataFrame(rows, columns=["Stock", "F-Score", "Potential", "Price-to-bo
 
 def _color_scores(df: pd.DataFrame) -> pd.DataFrame:
     styles = pd.DataFrame("", index=df.index, columns=df.columns)
-    for i, score in enumerate(scores):
+    def css(score):
         bg, fg = TIER_COLORS[tier(score)]
-        css = f"background-color:{bg};color:{fg};font-weight:700;"
-        styles.iloc[i, df.columns.get_loc("F-Score")] = css
-        styles.iloc[i, df.columns.get_loc("Potential")] = css
+        return f"background-color:{bg};color:{fg};font-weight:700;"
+
+    for i, (score, q_score) in enumerate(zip(scores, q_scores)):
+        styles.iloc[i, df.columns.get_loc("F-Score (annual)")] = css(score)
+        styles.iloc[i, df.columns.get_loc("Potential")] = css(score)
+        if q_score is not None:
+            styles.iloc[i, df.columns.get_loc("F-Score (quarterly)")] = css(q_score)
     return styles
 
 
@@ -213,22 +247,30 @@ else:
         main.style.apply(_color_scores, axis=None),
         hide_index=True, width="stretch", height=min(38 * len(main) + 40, 460),
         on_select="rerun", selection_mode="single-row", key="score_table",
-        column_config={"F-Score": st.column_config.TextColumn(width="small"),
-                       "Potential": st.column_config.TextColumn(width="small")},
+        column_config={"Potential": st.column_config.TextColumn(width="small")},
     )
     selected = event.selection.rows
     if selected:
         p = ranked[selected[0]]
         fs = result.fscores[p["ticker"]]
+        q = result.quarterly_fscores.get(p["ticker"])
         with st.container(border=True):
-            st.markdown(f"**{p['ticker']}  ·  {p['name']}** &nbsp; {score_html(fs.score, '1.6rem')}",
-                        unsafe_allow_html=True)
-            for ch in fs.checks:
-                ok, sentence = plain_point(ch, fs.missing)
-                mark = ('<span style="color:#16a34a;font-weight:700;">&#10003;</span>' if ok
-                        else '<span style="color:#94a3b8;font-weight:700;">?</span>' if ok is None
-                        else '<span style="color:#dc2626;font-weight:700;">&#10007;</span>')
-                st.markdown(f"{mark} &nbsp; {sentence}", unsafe_allow_html=True)
+            st.markdown(f"**{p['ticker']}  ·  {p['name']}**")
+            left, right = st.columns(2)
+            with left:
+                fy = fmt_date(date.fromisoformat(fs.period_current)) if fs.period_current else "n/a"
+                st.markdown(f"**Annual report (10-K)**, year ended {fy} &nbsp; {score_html(fs.score, '1.6rem')}",
+                            unsafe_allow_html=True)
+                render_points(fs, ANNUAL_WORDS)
+            with right:
+                if q:
+                    st.markdown(f"**Latest quarter (10-Q)**, {quarter_label(q.period_current)} vs "
+                                f"{quarter_label(q.period_prior)} &nbsp; {score_html(q.score, '1.6rem')}",
+                                unsafe_allow_html=True)
+                    render_points(q, QUARTER_WORDS)
+                else:
+                    st.markdown("**Latest quarter (10-Q)**")
+                    st.caption("Quarterly numbers are not available for this stock.")
             events = timeline(dates_by_ticker[p["ticker"]], fs.period_current)
             if events:
                 st.markdown("**Dates to check on the chart**")

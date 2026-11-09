@@ -15,14 +15,15 @@ TODAY = date(2026, 1, 1)
 COLS = [pd.Timestamp("2025-12-31"), pd.Timestamp("2024-12-31")]
 
 
-def statements(improving: bool):
+def statements(improving: bool, cols=None):
+    cols = cols or COLS
     cur = dict(ni=120, rev=1100, cogs=638, ta=2000, ca=660, cl=400, ltd=450, sh=98, cfo=180)
     pri = dict(ni=100, rev=1000, cogs=600, ta=2000, ca=600, cl=400, ltd=500, sh=100, cfo=150)
     if not improving:
         cur, pri = pri, cur
 
     def frame(rows):
-        return pd.DataFrame({COLS[0]: [cur[k] for k in rows.values()], COLS[1]: [pri[k] for k in rows.values()]},
+        return pd.DataFrame({cols[0]: [cur[k] for k in rows.values()], cols[1]: [pri[k] for k in rows.values()]},
                             index=list(rows))
 
     return {
@@ -60,6 +61,9 @@ class FakeProvider:
 
     def get_financials(self, ticker):
         return statements(improving=ticker != "TRAP")
+
+    def get_quarterly_financials(self, ticker):
+        return statements(improving=ticker == "TRAP", cols=[pd.Timestamp("2025-09-30"), pd.Timestamp("2024-09-30")])
 
     def get_earnings_dates(self, ticker):
         return [date(2025, 2, 3), date(2025, 10, 30), date(2026, 1, 6)]
@@ -104,6 +108,10 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(result.option_notes, {})
         self.assertEqual(set(result.filings), {"CHEAP", "TRAP"})
         self.assertEqual(result.earnings_dates["CHEAP"][-1], date(2026, 1, 6))
+        # Quarterly score is reported for every scored stock but does not change the picks.
+        self.assertGreaterEqual(result.quarterly_fscores["TRAP"].score, 8)
+        self.assertLess(result.quarterly_fscores["CHEAP"].score, 8)
+        self.assertEqual(result.quarterly_fscores["CHEAP"].period_current, "2025-09-30")
 
         sig = result.signals[0]
         self.assertEqual(sig.fscore.score, 9)

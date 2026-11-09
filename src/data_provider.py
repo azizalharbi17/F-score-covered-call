@@ -125,6 +125,25 @@ class MarketDataProvider:
 
         return self.cache.get_or_fetch(f"financials:{symbol}", config.FINANCIALS_TTL_HOURS, fetch)
 
+    def get_quarterly_financials(self, symbol: str) -> dict[str, pd.DataFrame] | None:
+        """Quarterly (10-Q) income statement, balance sheet and cash flow statement."""
+
+        def fetch():
+            try:
+                t = self._ticker(symbol)
+                statements = {
+                    "income": t.quarterly_income_stmt,
+                    "balance": t.quarterly_balance_sheet,
+                    "cashflow": t.quarterly_cashflow,
+                }
+            except Exception:
+                return None
+            if any(df is None or df.empty for df in statements.values()):
+                return None
+            return statements
+
+        return self.cache.get_or_fetch(f"quarterly:{symbol}", config.PROFILE_TTL_HOURS, fetch)
+
     def get_earnings_dates(self, symbol: str) -> list:
         """Past and scheduled earnings announcement dates, oldest first."""
 

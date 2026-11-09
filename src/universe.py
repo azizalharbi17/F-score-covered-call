@@ -17,7 +17,7 @@ import pandas as pd
 from src import config
 from src.earnings_tracker import build_earnings_calendar, classify_earnings_risk, days_until
 from src.options_engine import CoveredCallSetup, no_setup_reason, select_covered_call
-from src.piotroski import FScoreResult, score_statements
+from src.piotroski import FScoreResult, score_quarterly_statements, score_statements
 from src.sec_edgar import latest_periodic_filing
 
 STAGES = [
@@ -54,6 +54,7 @@ class ScreenResult:
     option_notes: dict[str, str] = field(default_factory=dict)  # F-Score ≥ 8 names with no call: why
     filings: dict[str, dict | None] = field(default_factory=dict)      # scored names: latest 10-Q / 10-K
     earnings_dates: dict[str, list] = field(default_factory=dict)      # scored names: earnings dates
+    quarterly_fscores: dict[str, FScoreResult | None] = field(default_factory=dict)  # latest quarter vs year ago
 
 
 def passes_cap_and_sector(p: dict) -> bool:
@@ -116,15 +117,19 @@ def run_screen(tickers: list[str], provider, sec_client=None, today: date | None
     funnel[STAGES[5]] = len(strong)
     scored = [p for p in cheap if p["ticker"] in fscores]
 
-    # Filing and earnings dates for every scored name, so the score can be lined up with events.
-    def dates(p):
+    # For every scored name: filing and earnings dates (to line the score up with events) and a
+    # quarterly F-Score for reference. Neither affects which stocks become picks.
+    def extras(p):
         t = p["ticker"]
-        return t, (sec_client.get_latest_filings(t) if sec_client else None), provider.get_earnings_dates(t)
+        quarterly = provider.get_quarterly_financials(t)
+        return (t, (sec_client.get_latest_filings(t) if sec_client else None), provider.get_earnings_dates(t),
+                score_quarterly_statements(quarterly) if quarterly else None)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        dated = list(pool.map(dates, scored))
-    filings = {t: f for t, f, _ in dated}
-    earnings_dates = {t: e for t, _, e in dated}
+        dated = list(pool.map(extras, scored))
+    filings = {t: f for t, f, _, _ in dated}
+    earnings_dates = {t: e for t, _, e, _ in dated}
+    quarterly_fscores = {t: q for t, _, _, q in dated}
 
     def option_setup(p):
         exps = provider.get_option_expirations(p["ticker"])
@@ -144,7 +149,8 @@ def run_screen(tickers: list[str], provider, sec_client=None, today: date | None
     funnel[STAGES[6]] = len(signals)
 
     earnings = build_earnings_calendar(liquid, today)
-    return ScreenResult(funnel, signals, fscores, earnings, today, scored, option_notes, filings, earnings_dates)
+    return ScreenResult(funnel, signals, fscores, earnings, today, scored, option_notes, filings, earnings_dates,
+                        quarterly_fscores)
 
 
 def signals_table(result: ScreenResult) -> pd.DataFrame:

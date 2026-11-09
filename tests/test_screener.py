@@ -9,7 +9,7 @@ from src.earnings_tracker import (CLEAR, HIGH, MEDIUM, UNKNOWN, build_earnings_c
                                   last_and_next, past_earnings, results_announced_before)
 from src.options_engine import bs_call_delta, no_setup_reason, payoff_curve, select_covered_call
 from src.paper_trader import mark_to_market, simulate_closeout
-from src.piotroski import compute_fscore, score_statements
+from src.piotroski import compute_fscore, score_quarterly_statements, score_statements, year_ago_quarters
 from src.universe import bottom_pb_by_sector
 
 
@@ -92,6 +92,39 @@ class TestPiotroski(unittest.TestCase):
         result = score_statements(statements)
         self.assertEqual(result.score, 9)
         self.assertEqual(result.period_current, "2025-12-31")
+
+
+    def test_quarterly_uses_same_quarter_a_year_earlier(self):
+        q = [pd.Timestamp(d) for d in ("2026-09-30", "2026-06-30", "2026-03-31", "2025-12-31",
+                                        "2025-09-30", "2025-06-30")]
+        current, prior = strong_pair()
+        weak = items(net_income=-50.0)  # quarters in between should be ignored
+
+        def frame(mapping):
+            data = {}
+            for c in q:
+                src = current if c == q[0] else prior if c == q[4] else weak
+                data[c] = [src[k] for k in mapping.values()]
+            df = pd.DataFrame(data, index=list(mapping))
+            df[q[5]] = float("nan")  # Yahoo leaves older quarters empty
+            return df
+
+        statements = {
+            "income": frame({"Net Income": "net_income", "Total Revenue": "revenue", "Gross Profit": "gross_profit"}),
+            "balance": frame({"Total Assets": "total_assets", "Current Assets": "current_assets",
+                              "Current Liabilities": "current_liabilities", "Long Term Debt": "long_term_debt",
+                              "Ordinary Shares Number": "shares_outstanding"}),
+            "cashflow": frame({"Operating Cash Flow": "cfo"}),
+        }
+        self.assertEqual(year_ago_quarters(statements), (q[0], q[4]))
+        result = score_quarterly_statements(statements)
+        self.assertEqual(result.score, 9)
+        self.assertEqual((result.period_current, result.period_prior), ("2026-09-30", "2025-09-30"))
+
+    def test_quarterly_without_year_ago_quarter(self):
+        cols = [pd.Timestamp("2026-09-30"), pd.Timestamp("2026-06-30")]
+        df = pd.DataFrame({c: [1.0] for c in cols}, index=["Total Assets"])
+        self.assertIsNone(score_quarterly_statements({"income": df, "balance": df, "cashflow": df}))
 
 
 class TestOptions(unittest.TestCase):
