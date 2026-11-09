@@ -52,6 +52,8 @@ class ScreenResult:
     run_date: date = field(default_factory=date.today)
     candidates: list[dict] = field(default_factory=list)      # profiles that reached the F-Score step
     option_notes: dict[str, str] = field(default_factory=dict)  # F-Score ≥ 8 names with no call: why
+    filings: dict[str, dict | None] = field(default_factory=dict)      # scored names: latest 10-Q / 10-K
+    earnings_dates: dict[str, list] = field(default_factory=dict)      # scored names: earnings dates
 
 
 def passes_cap_and_sector(p: dict) -> bool:
@@ -112,6 +114,17 @@ def run_screen(tickers: list[str], provider, sec_client=None, today: date | None
         fscores = {t: r for t, r in pool.map(score, cheap) if r is not None}
     strong = [p for p in cheap if p["ticker"] in fscores and fscores[p["ticker"]].score >= config.MIN_FSCORE]
     funnel[STAGES[5]] = len(strong)
+    scored = [p for p in cheap if p["ticker"] in fscores]
+
+    # Filing and earnings dates for every scored name, so the score can be lined up with events.
+    def dates(p):
+        t = p["ticker"]
+        return t, (sec_client.get_latest_filings(t) if sec_client else None), provider.get_earnings_dates(t)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        dated = list(pool.map(dates, scored))
+    filings = {t: f for t, f, _ in dated}
+    earnings_dates = {t: e for t, _, e in dated}
 
     def option_setup(p):
         exps = provider.get_option_expirations(p["ticker"])
@@ -127,13 +140,11 @@ def run_screen(tickers: list[str], provider, sec_client=None, today: date | None
         if setup is None:
             option_notes[p["ticker"]] = reason
             continue
-        filings = sec_client.get_latest_filings(p["ticker"]) if sec_client else None
-        signals.append(Signal(p, fscores[p["ticker"]], setup, filings))
+        signals.append(Signal(p, fscores[p["ticker"]], setup, filings.get(p["ticker"])))
     funnel[STAGES[6]] = len(signals)
 
     earnings = build_earnings_calendar(liquid, today)
-    scored = [p for p in cheap if p["ticker"] in fscores]
-    return ScreenResult(funnel, signals, fscores, earnings, today, scored, option_notes)
+    return ScreenResult(funnel, signals, fscores, earnings, today, scored, option_notes, filings, earnings_dates)
 
 
 def signals_table(result: ScreenResult) -> pd.DataFrame:

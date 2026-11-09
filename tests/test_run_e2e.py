@@ -61,6 +61,9 @@ class FakeProvider:
     def get_financials(self, ticker):
         return statements(improving=ticker != "TRAP")
 
+    def get_earnings_dates(self, ticker):
+        return [date(2025, 2, 3), date(2025, 10, 30), date(2026, 1, 6)]
+
     def get_option_expirations(self, ticker):
         return ["2026-01-16", "2026-02-06"]
 
@@ -99,6 +102,8 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(result.fscores["TRAP"].score < 8, True)
         self.assertEqual(sorted(c["ticker"] for c in result.candidates), ["CHEAP", "TRAP"])
         self.assertEqual(result.option_notes, {})
+        self.assertEqual(set(result.filings), {"CHEAP", "TRAP"})
+        self.assertEqual(result.earnings_dates["CHEAP"][-1], date(2026, 1, 6))
 
         sig = result.signals[0]
         self.assertEqual(sig.fscore.score, 9)

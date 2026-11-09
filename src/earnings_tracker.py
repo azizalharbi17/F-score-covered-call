@@ -28,6 +28,19 @@ def days_until(earnings_date: date | None, today: date) -> int | None:
     return (earnings_date - today).days
 
 
+def last_and_next(dates: list[date], today: date) -> tuple[date | None, date | None]:
+    """Most recent earnings date on or before today, and the next one after today."""
+    past = [d for d in dates if d <= today]
+    future = [d for d in dates if d > today]
+    return (past[-1] if past else None), (future[0] if future else None)
+
+
+def results_announced_before(dates: list[date], filing_date: date, window_days: int = 90) -> date | None:
+    """The earnings announcement that came with a filing: latest date on or before it, within the window."""
+    candidates = [d for d in dates if 0 <= (filing_date - d).days <= window_days]
+    return candidates[-1] if candidates else None
+
+
 def build_earnings_calendar(profiles: list[dict], today: date | None = None) -> pd.DataFrame:
     """One row per screened equity, soonest earnings first."""
     today = today or date.today()

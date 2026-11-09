@@ -125,6 +125,20 @@ class MarketDataProvider:
 
         return self.cache.get_or_fetch(f"financials:{symbol}", config.FINANCIALS_TTL_HOURS, fetch)
 
+    def get_earnings_dates(self, symbol: str) -> list:
+        """Past and scheduled earnings announcement dates, oldest first."""
+
+        def fetch():
+            try:
+                df = self._ticker(symbol).get_earnings_dates(limit=12)
+            except Exception:
+                return None
+            if df is None or df.empty:
+                return None
+            return sorted({pd.Timestamp(ts).date() for ts in df.index})
+
+        return self.cache.get_or_fetch(f"earnings:{symbol}", config.PROFILE_TTL_HOURS, fetch) or []
+
     def get_option_expirations(self, symbol: str) -> list[str]:
         def fetch():
             try:

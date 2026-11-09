@@ -5,7 +5,8 @@ from datetime import date
 
 import pandas as pd
 
-from src.earnings_tracker import CLEAR, HIGH, MEDIUM, UNKNOWN, build_earnings_calendar, classify_earnings_risk
+from src.earnings_tracker import (CLEAR, HIGH, MEDIUM, UNKNOWN, build_earnings_calendar, classify_earnings_risk,
+                                  last_and_next, results_announced_before)
 from src.options_engine import bs_call_delta, no_setup_reason, payoff_curve, select_covered_call
 from src.paper_trader import mark_to_market, simulate_closeout
 from src.piotroski import compute_fscore, score_statements
@@ -180,6 +181,18 @@ class TestEarnings(unittest.TestCase):
         self.assertEqual(list(cal["Ticker"][:2]), ["B", "A"])
         self.assertEqual(cal.set_index("Ticker").loc["B", "Event Risk"], HIGH)
         self.assertEqual(cal.set_index("Ticker").loc["C", "Event Risk"], UNKNOWN)
+
+
+    def test_last_and_next_earnings(self):
+        dates = [date(2026, 2, 2), date(2026, 5, 5), date(2026, 11, 2), date(2027, 2, 1)]
+        self.assertEqual(last_and_next(dates, date(2026, 11, 8)), (date(2026, 11, 2), date(2027, 2, 1)))
+        self.assertEqual(last_and_next(dates, date(2026, 11, 2)), (date(2026, 11, 2), date(2027, 2, 1)))
+        self.assertEqual(last_and_next([], date(2026, 11, 8)), (None, None))
+
+    def test_results_announced_before_filing(self):
+        dates = [date(2025, 10, 30), date(2026, 2, 2), date(2026, 5, 5)]
+        self.assertEqual(results_announced_before(dates, date(2026, 2, 6)), date(2026, 2, 2))
+        self.assertIsNone(results_announced_before(dates, date(2026, 9, 30)))
 
 
 class TestPriceToBook(unittest.TestCase):
