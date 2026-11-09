@@ -59,8 +59,8 @@ class SecEdgarClient:
         cik_map = self.get_cik_map()
         return cik_map.get(ticker.upper()) or cik_map.get(ticker.upper().replace(".", "-"))
 
-    def get_latest_filings(self, ticker: str) -> dict | None:
-        """Latest 10-Q and 10-K: filing date, period (report) date and document URL."""
+    def get_periodic_filings(self, ticker: str) -> dict | None:
+        """All recent 10-Q and 10-K filings, newest first: {"cik": ..., "filings": [...]}."""
         cik = self.get_cik(ticker)
         if cik is None:
             return None
@@ -70,25 +70,33 @@ class SecEdgarClient:
             if not data:
                 return None
             recent = data.get("filings", {}).get("recent", {})
-            filings: dict = {"cik": cik}
+            filings = []
             for i, form in enumerate(recent.get("form", [])):
-                if form in PERIODIC_FORMS and form not in filings:
-                    accession = recent["accessionNumber"][i]
-                    filings[form] = {
+                if form in PERIODIC_FORMS:
+                    filings.append({
                         "form": form,
                         "filing_date": recent["filingDate"][i],
                         "report_date": recent["reportDate"][i],
                         "url": ARCHIVE_URL.format(
                             cik=cik,
-                            accession=accession.replace("-", ""),
+                            accession=recent["accessionNumber"][i].replace("-", ""),
                             document=recent["primaryDocument"][i],
                         ),
-                    }
-                if all(f in filings for f in PERIODIC_FORMS):
-                    break
-            return filings
+                    })
+            filings.sort(key=lambda f: f["filing_date"], reverse=True)
+            return {"cik": cik, "filings": filings}
 
-        return self.cache.get_or_fetch(f"sec:filings:{cik}", config.SEC_TTL_HOURS, fetch)
+        return self.cache.get_or_fetch(f"sec:periodic:{cik}", config.SEC_TTL_HOURS, fetch)
+
+    def get_latest_filings(self, ticker: str) -> dict | None:
+        """Latest 10-Q and 10-K: filing date, period (report) date and document URL."""
+        data = self.get_periodic_filings(ticker)
+        if not data:
+            return None
+        filings: dict = {"cik": data["cik"]}
+        for f in data["filings"]:
+            filings.setdefault(f["form"], f)
+        return filings
 
 
 def latest_periodic_filing(filings: dict | None) -> dict | None:

@@ -33,6 +33,7 @@ PROFILE_TTL_HOURS = 24
 FINANCIALS_TTL_HOURS = 24 * 7
 OPTIONS_TTL_HOURS = 0.25
 SEC_TTL_HOURS = 24
+PRICE_HISTORY_TTL_HOURS = 1
 PAPER_PORTFOLIO_PATH = ROOT_DIR / "data" / "paper_portfolio.json"
 
 # --- Universe filters ------------------------------------------------------

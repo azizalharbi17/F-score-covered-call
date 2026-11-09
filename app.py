@@ -14,6 +14,7 @@ from src.data_provider import MarketDataProvider
 from src.earnings_tracker import last_and_next, past_earnings, results_announced_before
 from src.options_engine import payoff_curve, robinhood_order
 from src.paper_trader import PaperPortfolio, mark_to_market, simulate_closeout
+from src.price_reaction import better_since, measure, past_quarters, since_sentence, summarize
 from src.sec_edgar import SecEdgarClient, filings_browse_url
 from src.universe import STAGES, run_screen, signals_table
 
@@ -46,6 +47,137 @@ TIER_COLORS = {  # background, text
     "Low": ("#fee2e2", "#991b1b"),
 }
 GREEN, RED = "#16a34a", "#dc2626"
+# Price chart line colors
+EARNINGS_BLUE, TENK_PURPLE, TENQ_ORANGE, NEXT_GRAY = "#2563eb", "#7c3aed", "#ea580c", "#6b7280"
+LABEL_SPACING_DAYS = 130  # about one label's width on a 2-year axis
+
+
+def price_chart(prices: pd.Series, d: dict, since_10k, since_10q, today: date) -> go.Figure:
+    """Last 2 years of closes with report dates, shaded periods since each filing, and their lows/highs."""
+    end = pd.Timestamp(today)
+    start = end - pd.DateOffset(years=2)
+    shown = prices[prices.index >= start]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=shown.index, y=shown.values, name="Daily close", line=dict(color="#0f172a", width=1.6),
+                             hovertemplate="%{x|%b %-d, %Y}: $%{y:.2f}<extra></extra>"))
+
+    if d["annual_filed"]:
+        fig.add_vrect(x0=pd.Timestamp(d["annual_filed"]), x1=end, fillcolor=TENK_PURPLE, opacity=0.08,
+                      line_width=0, layer="below")
+    if d["quarterly_filed"]:
+        fig.add_vrect(x0=pd.Timestamp(d["quarterly_filed"]), x1=end, fillcolor=TENQ_ORANGE, opacity=0.10,
+                      line_width=0, layer="below")
+
+    x_end = end
+    if d["next_earnings"]:
+        x_end = max(end, pd.Timestamp(d["next_earnings"]) + pd.Timedelta(days=10))
+
+    # Vertical lines, labeled above the chart. Labels that would collide go on a higher row.
+    lines = []
+    for when in dict.fromkeys(d[k] for k in ("annual_results", "earnings_2q_ago", "last_earnings") if d[k]):
+        lines.append((when, EARNINGS_BLUE, "solid", "Earnings"))
+    if d["annual_filed"]:
+        lines.append((d["annual_filed"], TENK_PURPLE, "solid", "10-K filed"))
+    if d["quarterly_filed"]:
+        lines.append((d["quarterly_filed"], TENQ_ORANGE, "solid", "10-Q filed"))
+    if d["next_earnings"]:
+        lines.append((d["next_earnings"], NEXT_GRAY, "dash", "Next earnings"))
+    row_last: list[date] = []  # date of the last label placed on each row
+    for when, color, dash, label in sorted(lines, key=lambda line: line[0]):
+        x = pd.Timestamp(when)
+        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=1, yref="paper", line=dict(color=color, width=1.5, dash=dash))
+        row = next((i for i, last in enumerate(row_last) if (when - last).days > LABEL_SPACING_DAYS), len(row_last))
+        row_last[row:row + 1] = [when]
+        # Keep labels near either edge inside the chart.
+        anchor = ("right" if (x_end - x).days < LABEL_SPACING_DAYS / 2
+                  else "left" if (x - start).days < LABEL_SPACING_DAYS / 2 else "center")
+        fig.add_annotation(x=x, y=1.01 + 0.055 * row, yref="paper", text=f"{label} {when:%b %-d}", showarrow=False,
+                           xanchor=anchor, yanchor="bottom", font=dict(color=color, size=11))
+    label_rows = max(len(row_last), 1)
+
+    # Lowest and highest close in each shaded period, labeled vs the filing-day price.
+    for move, color, name, align in ((since_10k, TENK_PURPLE, "10-K", "left"), (since_10q, TENQ_ORANGE, "10-Q", "right")):
+        if not move:
+            continue
+        for kind, when, price, pct in (("Low", move.low_date, move.low_price, move.low_vs_start),
+                                       ("High", move.high_date, move.high_price, move.high_vs_start)):
+            fig.add_trace(go.Scatter(
+                x=[pd.Timestamp(when)], y=[price], mode="markers+text", showlegend=False,
+                marker=dict(color=color, size=10, line=dict(color="white", width=1)),
+                text=[f"{pct * 100:+.1f}%"], textfont=dict(color=color, size=12),
+                textposition=f"middle {align}", cliponaxis=False,
+                hovertemplate=(f"{kind} since the {name}: %{{x|%b %-d, %Y}}, $%{{y:.2f}} "
+                               f"({pct * 100:+.1f}% vs filing day)<extra></extra>"),
+            ))
+
+    for name, color, dash in (("Earnings report", EARNINGS_BLUE, "solid"), ("10-K filed", TENK_PURPLE, "solid"),
+                              ("10-Q filed", TENQ_ORANGE, "solid"), ("Next earnings (scheduled)", NEXT_GRAY, "dash")):
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", name=name, line=dict(color=color, dash=dash)))
+
+    fig.update_layout(template="plotly_white", height=480 + 26 * label_rows,
+                      margin=dict(t=14 + 26 * label_rows, b=10, l=10, r=10),
+                      xaxis=dict(range=[start, x_end]), yaxis_title="Closing price ($)",
+                      legend=dict(orientation="h", yanchor="top", y=-0.08))
+    return fig
+
+
+def _signed_pct(x: float) -> str:
+    return f"{x * 100:+.1f}%"
+
+
+def render_price_section(ticker: str, d: dict, prices: pd.Series | None, periodic: dict | None, today: date) -> None:
+    has_prices = prices is not None and not prices.empty
+    since_10k = measure(prices, d["annual_filed"]) if has_prices else None
+    since_10q = measure(prices, d["quarterly_filed"]) if has_prices else None
+
+    if has_prices:
+        st.plotly_chart(price_chart(prices, d, since_10k, since_10q, today), width="stretch", key=f"chart_{ticker}",
+                        config={"displayModeBar": False})
+        st.caption("Purple shading: since the 10-K was filed. Orange shading: since the latest 10-Q was filed. "
+                   "Dots mark the lowest and highest close in each period, with the % vs the filing-day close.")
+    else:
+        st.caption("Price history is not available for this stock.")
+
+    with st.container(border=True):
+        st.markdown("**Since the reports**")
+        st.markdown(since_sentence("10-K", d["annual_filed"], since_10k))
+        st.markdown(since_sentence("latest 10-Q", d["quarterly_filed"], since_10q))
+        verdict = better_since(since_10k.change if since_10k else None, since_10q.change if since_10q else None)
+        st.markdown(f"Better since: **{verdict}**")
+
+    st.markdown("**Past quarters**")
+    rows = past_quarters(prices if has_prices else None, (periodic or {}).get("filings", []), count=8)
+    if not rows:
+        st.caption("Filing history is not available for this stock.")
+        return
+    table, changes = [], []
+    for r in rows:
+        m = r["move"]
+        changes.append(m.change if m else None)
+        table.append({
+            "Filing date": fmt_date(r["filing_date"], "n/a"),
+            "Form": r["form"],
+            "Change by next report": _signed_pct(m.change) if m else "n/a",
+            "Biggest dip": _signed_pct(m.dip) if m else "n/a",
+            "Days to dip": (str(m.days_to_dip(r["filing_date"])) if m.dip < 0 else "No dip") if m else "n/a",
+            "Highest rise": _signed_pct(m.rise) if m else "n/a",
+            "Pattern": r["pattern"] or "n/a",
+        })
+    df = pd.DataFrame(table)
+
+    def _color(frame: pd.DataFrame) -> pd.DataFrame:
+        styles = pd.DataFrame("", index=frame.index, columns=frame.columns)
+        col = frame.columns.get_loc("Change by next report")
+        for i, change in enumerate(changes):
+            if change is not None:
+                bg, fg = TIER_COLORS["High"] if change >= 0 else TIER_COLORS["Low"]
+                styles.iloc[i, col] = f"background-color:{bg};color:{fg};font-weight:700;"
+        return styles
+
+    st.dataframe(df.style.apply(_color, axis=None), hide_index=True, width="stretch")
+    st.caption("Each row runs from the filing day's close to the close the day before the next filing. "
+               "The latest filing is covered in \"Since the reports\" because its next report hasn't come yet.")
+    st.markdown(summarize(rows))
 
 
 @st.cache_data(ttl=3600, show_spinner="Checking stocks (the first run downloads data and can take a minute)…")
@@ -169,6 +301,7 @@ preset = st.session_state.get("preset", config.DEFAULT_PRESET)
 result, updated_at = load_screen(preset, date.today())
 today = result.run_date
 provider = MarketDataProvider()
+sec_client = SecEdgarClient()
 portfolio = PaperPortfolio()
 picks = result.signals
 pick_tickers = {s.ticker for s in picks}
@@ -276,6 +409,9 @@ else:
                 st.markdown("**Dates to check on the chart**")
                 for when, what in events:
                     st.markdown(f"- **{fmt_date(when)}**: {what}")
+            render_price_section(p["ticker"], dates_by_ticker[p["ticker"]],
+                                 provider.get_price_history(p["ticker"], years=3),
+                                 sec_client.get_periodic_filings(p["ticker"]), today)
     else:
         st.caption("Click a row to see that stock's 9 points.")
 

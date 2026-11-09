@@ -158,6 +158,22 @@ class MarketDataProvider:
 
         return self.cache.get_or_fetch(f"earnings:{symbol}", config.PROFILE_TTL_HOURS, fetch) or []
 
+    def get_price_history(self, symbol: str, years: int = 3) -> pd.Series | None:
+        """Daily closing prices (split-adjusted), indexed by date."""
+
+        def fetch():
+            try:
+                df = self._ticker(symbol).history(period=f"{years}y", interval="1d", auto_adjust=False)
+            except Exception:
+                return None
+            if df is None or df.empty or "Close" not in df:
+                return None
+            closes = df["Close"].dropna()
+            closes.index = pd.to_datetime([ts.date() for ts in closes.index])
+            return closes
+
+        return self.cache.get_or_fetch(f"prices:{symbol}:{years}y", config.PRICE_HISTORY_TTL_HOURS, fetch)
+
     def get_option_expirations(self, symbol: str) -> list[str]:
         def fetch():
             try:
