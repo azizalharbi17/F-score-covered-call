@@ -1,4 +1,4 @@
-"""Streamlit dashboard: Piotroski F-Score & P/B Covered Call Screener."""
+"""Streamlit dashboard: F-Score Stock Screener (Piotroski F-Score + P/B, with covered-call ideas)."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from src.price_reaction import better_since, measure, past_quarters, since_sente
 from src.sec_edgar import SecEdgarClient, filings_browse_url
 from src.universe import STAGES, run_screen, signals_table
 
-st.set_page_config(page_title="F-Score Covered Call Screener", layout="wide")
+st.set_page_config(page_title="F-Score Stock Screener", layout="wide")
 
 # Plain-language versions of the 9 F-Score points: (short name, if passed, if failed).
 # {when} is the period scored ("last year" / "in the latest quarter"); {prior} is what it is compared with.
